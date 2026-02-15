@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+sqlalchemy
+watchdog
+websockets
+aiofiles
