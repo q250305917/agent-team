@@ -6,11 +6,19 @@
 """
 import asyncio
 import logging
+import os
+import secrets
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 import json
+
+# 加载 .env 文件中的环境变量
+env_path = Path(__file__).parent / ".env"
+load_dotenv(env_path)
 
 from database import init_db, get_db, SessionLocal
 from models import Team, Member, Message, Task
@@ -29,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 # WebSocket 连接管理
 connected_clients: set[WebSocket] = set()
+
+# WebSocket 认证令牌
+# 从环境变量读取，默认为固定值（生产环境应通过环境变量设置）
+WS_TOKEN = os.environ.get("WS_TOKEN", "agent-teams-dashboard-secure-token")
+logger.info(f"WebSocket 认证令牌: {WS_TOKEN}")
 
 
 async def broadcast_to_clients(event: dict):
@@ -86,13 +99,22 @@ app = FastAPI(
 )
 
 # CORS 配置，允许前端开发服务器访问
+# 生产环境应通过环境变量 ALLOWED_ORIGINS 配置允许的源
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # 仅允许必要的 HTTP 方法
+    allow_headers=["Content-Type", "Authorization", "Accept"],  # 仅允许必要的请求头
 )
+
+# 打印 CORS 配置信息
+logger.info(f"CORS 允许的源: {ALLOWED_ORIGINS}")
 
 # 挂载路由
 app.include_router(teams_router)
@@ -180,8 +202,11 @@ def get_stats():
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
+async def websocket_endpoint(ws: WebSocket, token: str | None = None):
     """WebSocket 端点：实时推送文件变化事件
+
+    需要通过 token 参数进行认证：
+    ws://localhost:8000/ws?token=xxx
 
     客户端连接后，当 ~/.claude/teams/ 或 ~/.claude/tasks/ 下的文件发生变化时，
     会收到 JSON 格式的事件通知：
@@ -189,6 +214,12 @@ async def websocket_endpoint(ws: WebSocket):
     - {type: "message_new", data: {team: "xxx"}}
     - {type: "task_update", data: {team: "xxx"}}
     """
+    # 验证令牌
+    if token != WS_TOKEN:
+        logger.warning(f"WebSocket 认证失败: token={token}")
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+
     await ws.accept()
     connected_clients.add(ws)
     logger.info(f"WebSocket 客户端已连接，当前连接数: {len(connected_clients)}")

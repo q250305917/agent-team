@@ -15,6 +15,26 @@ TEAMS_DIR = os.path.expanduser("~/.claude/teams")
 TASKS_DIR = os.path.expanduser("~/.claude/tasks")
 
 
+def _is_safe_path(base_dir: str, target_path: str) -> bool:
+    """验证目标路径是否在基础目录内，防止路径遍历攻击
+
+    Args:
+        base_dir: 基础目录路径
+        target_path: 需要验证的目标路径
+
+    Returns:
+        如果目标路径在基础目录内返回 True，否则返回 False
+    """
+    base = Path(base_dir).resolve()
+    target = Path(target_path).resolve()
+    try:
+        target.relative_to(base)
+        return True
+    except ValueError:
+        logger.warning(f"路径遍历攻击尝试: {target_path} 不在 {base_dir} 内")
+        return False
+
+
 def detect_msg_type(text: str) -> str:
     """根据消息文本内容判断消息类型
 
@@ -49,7 +69,17 @@ def scan_team(team_dir: str, db: Session) -> Team | None:
 
     返回创建或更新后的 Team 对象
     """
+    # 验证 team_dir 是否在 TEAMS_DIR 内，防止路径遍历攻击
+    if not _is_safe_path(TEAMS_DIR, team_dir):
+        logger.error(f"安全检查失败: {team_dir} 不在允许的目录内")
+        return None
+
     config_path = os.path.join(team_dir, "config.json")
+    # 验证 config_path 是否在安全范围内
+    if not _is_safe_path(TEAMS_DIR, config_path):
+        logger.error(f"安全检查失败: {config_path} 不在允许的目录内")
+        return None
+
     if not os.path.exists(config_path):
         return None
 
@@ -131,6 +161,12 @@ def scan_team(team_dir: str, db: Session) -> Team | None:
 def scan_tasks_for_team(team_name: str, team_id: int, db: Session):
     """扫描指定团队的任务目录，解析任务 JSON 文件并写入数据库"""
     tasks_dir = os.path.join(TASKS_DIR, team_name)
+
+    # 验证任务目录是否在 TASKS_DIR 内，防止路径遍历攻击
+    if not _is_safe_path(TASKS_DIR, tasks_dir):
+        logger.error(f"安全检查失败: 任务目录 {tasks_dir} 不在允许的目录内")
+        return
+
     if not os.path.isdir(tasks_dir):
         return
 
@@ -141,6 +177,11 @@ def scan_tasks_for_team(team_name: str, team_id: int, db: Session):
         if not task_file.endswith(".json"):
             continue
         task_path = os.path.join(tasks_dir, task_file)
+
+        # 验证任务文件路径是否在安全范围内
+        if not _is_safe_path(TASKS_DIR, task_path):
+            logger.warning(f"安全检查失败: 跳过不安全的任务文件 {task_path}")
+            continue
         try:
             with open(task_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -313,8 +354,16 @@ def incremental_scan(changed_path: str) -> dict | None:
         path = Path(changed_path)
         path_str = str(path)
 
+        # 验证路径是否在允许的目录内，防止路径遍历攻击
+        is_in_teams = _is_safe_path(TEAMS_DIR, path_str)
+        is_in_tasks = _is_safe_path(TASKS_DIR, path_str)
+
+        if not is_in_teams and not is_in_tasks:
+            logger.warning(f"安全检查失败: 变更路径 {changed_path} 不在允许的目录内")
+            return None
+
         # 判断变化属于哪个团队
-        if TEAMS_DIR in path_str:
+        if is_in_teams:
             # 从路径中提取团队名
             rel = path.relative_to(TEAMS_DIR)
             team_name = rel.parts[0] if rel.parts else None
@@ -334,7 +383,7 @@ def incremental_scan(changed_path: str) -> dict | None:
                 scan_tasks_for_team(team.name, team.id, db)
                 return {"type": "team_update", "data": {"team": team.name}}
 
-        elif TASKS_DIR in path_str:
+        elif is_in_tasks:
             # 从路径中提取团队名
             rel = path.relative_to(TASKS_DIR)
             team_name = rel.parts[0] if rel.parts else None

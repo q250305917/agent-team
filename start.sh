@@ -13,12 +13,12 @@ echo ""
 echo "[1/2] 启动后端服务 (FastAPI + SQLite)..."
 cd "$BACKEND_DIR"
 source .venv/bin/activate
+
+# 激活虚拟环境后运行后端
 uvicorn main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 echo "  后端 PID: $BACKEND_PID (http://localhost:8000)"
-
-# 等待后端就绪
-sleep 2
+echo "  API 文档: http://localhost:8000/docs"
 
 # 启动前端
 echo "[2/2] 启动前端服务 (React + Vite)..."
@@ -30,7 +30,6 @@ echo "  前端 PID: $FRONTEND_PID (http://127.0.0.1:5173)"
 echo ""
 echo "=== 服务已启动 ==="
 echo "  Dashboard: http://127.0.0.1:5173"
-echo "  API 文档:  http://localhost:8000/docs"
 echo ""
 echo "按 Ctrl+C 停止所有服务..."
 
